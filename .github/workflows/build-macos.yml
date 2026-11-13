@@ -1,0 +1,105 @@
+# Compila o macos_slideshow para macOS.
+# Fica DENTRO do repo (ou do fork), em .github/workflows/build-macos.yml.
+#
+# O repo não tem .xcodeproj nem Package.swift (o README manda criar o
+# projeto à mão no Xcode). Por isso este workflow gera o projeto com o XcodeGen.
+
+name: Build macOS
+
+on:
+  push:
+    branches: [main]        # compila a cada push na main
+  workflow_dispatch:        # botão "Run workflow" na aba Actions
+
+jobs:
+  build:
+    runs-on: macos-latest   # Apple Silicon (arm64)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar XcodeGen
+        run: brew install xcodegen
+
+      - name: Gerar o projeto do Xcode
+        run: |
+          cat > project.yml <<'EOF'
+          name: SlideshowGenerator
+          options:
+            bundleIdPrefix: com.example
+            deploymentTarget:
+              macOS: "14.0"
+          settings:
+            base:
+              SWIFT_VERSION: "5.0"
+              CODE_SIGN_STYLE: Manual
+              CODE_SIGN_IDENTITY: "-"     # assinatura ad-hoc (sem conta Apple)
+              DEVELOPMENT_TEAM: ""
+              GENERATE_INFOPLIST_FILE: "YES"
+            configs:
+              Debug:
+                ENABLE_TESTABILITY: "YES"
+          targets:
+            SlideshowGenerator:
+              type: application
+              platform: macOS
+              sources: [Sources/SlideshowGenerator]
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.example.SlideshowGenerator
+                  PRODUCT_NAME: SlideshowGenerator
+                  MARKETING_VERSION: "1.0"
+                  CURRENT_PROJECT_VERSION: "1"
+                  INFOPLIST_KEY_CFBundleDisplayName: Slideshow Generator
+                  INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
+            SlideshowGeneratorTests:
+              type: bundle.unit-test
+              platform: macOS
+              sources: [Tests/SlideshowGeneratorTests]
+              dependencies:
+                - target: SlideshowGenerator
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.example.SlideshowGeneratorTests
+          schemes:
+            SlideshowGenerator:
+              build:
+                targets:
+                  SlideshowGenerator: all
+              test:
+                targets:
+                  - SlideshowGeneratorTests
+          EOF
+          xcodegen generate
+
+      - name: Versão do Xcode
+        run: xcodebuild -version
+
+      - name: Rodar os testes
+        run: |
+          xcodebuild test \
+            -project SlideshowGenerator.xcodeproj \
+            -scheme SlideshowGenerator \
+            -destination 'platform=macOS' \
+            -derivedDataPath build-test
+
+      - name: Compilar Release (universal arm64 + x86_64)
+        run: |
+          xcodebuild build \
+            -project SlideshowGenerator.xcodeproj \
+            -scheme SlideshowGenerator \
+            -configuration Release \
+            -derivedDataPath build \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO
+
+      - name: Empacotar o .app
+        run: |
+          APP=build/Build/Products/Release/SlideshowGenerator.app
+          lipo -archs "$APP/Contents/MacOS/SlideshowGenerator"
+          ditto -c -k --keepParent "$APP" SlideshowGenerator.zip
+
+      - name: Publicar o artefato
+        uses: actions/upload-artifact@v7
+        with:
+          name: SlideshowGenerator-macOS
+          path: SlideshowGenerator.zip
